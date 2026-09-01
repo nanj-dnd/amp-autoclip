@@ -1,0 +1,258 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Amp autoclip labeler</title>
+<style>
+  :root { --bg:#111; --panel:#1b1b1f; --fg:#eee; --dim:#888; --acc:#4da3ff;
+          --bowl:#ff9f43; --bat:#2ecc71; --rej:#e74c3c; }
+  body { background:var(--bg); color:var(--fg); font:14px/1.45 -apple-system,
+         system-ui, sans-serif; margin:0; padding:16px; }
+  h1 { font-size:16px; margin:0 0 10px; }
+  #layout { display:flex; gap:16px; }
+  #left { flex:2; min-width:0; }
+  #right { flex:1; max-width:420px; }
+  video { width:100%; background:#000; border-radius:6px; }
+  #timeline { width:100%; height:64px; background:var(--panel);
+              border-radius:6px; margin-top:8px; cursor:crosshair; }
+  .panel { background:var(--panel); border-radius:6px; padding:10px 12px;
+           margin-bottom:10px; }
+  select,button,input { background:#2a2a30; color:var(--fg); border:1px solid #444;
+           border-radius:4px; padding:4px 8px; font:inherit; }
+  button:hover { border-color:var(--acc); cursor:pointer; }
+  .seg { border-left:3px solid var(--dim); padding:6px 8px; margin:6px 0;
+         background:#232328; border-radius:0 4px 4px 0; }
+  .seg.active { outline:1px solid var(--acc); }
+  .seg.bowling { border-left-color:var(--bowl); }
+  .seg.batting { border-left-color:var(--bat); }
+  .seg.rejected { opacity:.45; border-left-color:var(--rej); }
+  .seg small { color:var(--dim); }
+  kbd { background:#333; border-radius:3px; padding:0 5px; font-size:12px; }
+  #help { color:var(--dim); font-size:12px; }
+  #status { color:var(--acc); min-height:18px; }
+  .anchor-row { display:flex; gap:6px; flex-wrap:wrap; margin-top:4px; }
+  .anchor-chip { font-size:12px; background:#2a2a30; border-radius:10px;
+                 padding:1px 8px; }
+</style>
+</head>
+<body>
+<h1>Amp autoclip labeler <span id="vidname" style="color:var(--dim)"></span></h1>
+<div id="layout">
+  <div id="left">
+    <div class="panel">
+      <select id="videosel"></select>
+      <select id="modesel">
+        <option value="auto">auto</option><option value="bowling">bowling</option>
+        <option value="batting">batting</option><option value="both">both</option>
+      </select>
+      <button id="prelabel">Prelabel (run engine)</button>
+      <button id="save">Save labels</button>
+      <input id="labeler" placeholder="your name" style="width:90px">
+      <input type="file" id="upfile" accept=".mp4,.mov,.m4v" style="display:none">
+      <button id="upload">Upload video</button>
+      <button id="autoclip" style="border-color:var(--bat);font-weight:600">
+        ✂ Auto-clip</button>
+      <span id="status"></span>
+    </div>
+    <video id="video" controls muted></video>
+    <canvas id="timeline"></canvas>
+    <div class="panel" id="clipsout" style="display:none">
+      <b>Auto-clipped deliveries</b>
+      <div id="clipgrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-top:8px"></div>
+    </div>
+    <div class="panel" id="help">
+      <kbd>space</kbd> play/pause &nbsp; <kbd>,</kbd>/<kbd>.</kbd> frame step
+      &nbsp; <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> 1s &nbsp;
+      <kbd>[</kbd>/<kbd>]</kbd> set start/end of active segment &nbsp;
+      <kbd>N</kbd> new bowling seg &nbsp; <kbd>M</kbd> new batting seg &nbsp;
+      <kbd>X</kbd> toggle reject &nbsp; anchors at playhead:
+      <kbd>B</kbd> BFC &nbsp; <kbd>F</kbd> FFC &nbsp; <kbd>R</kbd> release &nbsp;
+      <kbd>S</kbd> stance_set &nbsp; <kbd>T</kbd> trigger &nbsp; <kbd>I</kbd> impact
+      &nbsp; <kbd>L</kbd> toggle swing/leave
+    </div>
+  </div>
+  <div id="right">
+    <div class="panel">
+      <b>Segments</b> — rubric: bowling start = run-up initiation, end =
+      follow-through fully dissipated; batting start = stance set (include
+      stable stance frames!), end = settle after follow-through. Bias outward.
+      <div id="segs"></div>
+    </div>
+  </div>
+</div>
+<script>
+const qs = new URLSearchParams(location.search);
+const dir = qs.get('dir') || '.';
+const V = document.getElementById('video');
+const TL = document.getElementById('timeline');
+const ctx = TL.getContext('2d');
+let segments = [], active = -1, fps = 30;
+
+const api = (p, params) => fetch(p + '?' + new URLSearchParams({dir, ...params}));
+const status = m => document.getElementById('status').textContent = m;
+
+async function loadVideos(pick) {
+  const r = await api('/api/videos', {}); const j = await r.json();
+  const sel = document.getElementById('videosel');
+  sel.innerHTML = j.videos.map(v => `<option>${v}</option>`).join('');
+  const first = pick && j.videos.includes(pick) ? pick : j.videos[0];
+  if (first) { sel.value = first; loadVideo(first); }
+  sel.onchange = () => loadVideo(sel.value);
+}
+document.getElementById('upload').onclick = () =>
+  document.getElementById('upfile').click();
+document.getElementById('upfile').onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  status(`uploading ${f.name} (${(f.size/1e6).toFixed(0)} MB)…`);
+  const fd = new FormData(); fd.append('file', f);
+  const r = await fetch('/api/upload?' + new URLSearchParams({dir}),
+    {method:'POST', body: fd});
+  if (r.ok) { const j = await r.json();
+    status(`uploaded ${j.saved} — select it and hit Prelabel`);
+    loadVideos(j.saved); }
+  else status('upload failed: ' + (await r.text()));
+  e.target.value = '';
+};
+async function loadVideo(name) {
+  document.getElementById('vidname').textContent = '— ' + name;
+  V.src = '/api/video?' + new URLSearchParams({dir, name});
+  segments = []; active = -1;
+  const r = await api('/api/labels', {name}); const j = await r.json();
+  segments = j.segments.map(s => ({role:s.role, start_t:s.start_t, end_t:s.end_t,
+    anchors:s.anchors||{}, shot_type:s.shot_type||(s.role==='batting'?'swing':null),
+    rejected:!!s.rejected}));
+  if (segments.length) { active = 0; status('loaded ' + segments.length + ' saved labels'); }
+  render();
+}
+document.getElementById('prelabel').onclick = async () => {
+  status('running engine… (first run takes a while)');
+  const name = document.getElementById('videosel').value;
+  const mode = document.getElementById('modesel').value;
+  const r = await api('/api/prelabel', {name, mode});
+  if (!r.ok) { status('prelabel failed'); return; }
+  const m = await r.json();
+  fps = m.video.fps || 30;
+  segments = m.deliveries.map(d => ({
+    role: d.type, start_t: d.raw_start_timestamp, end_t: d.raw_end_timestamp,
+    anchors: Object.fromEntries((d.anchors||[]).map(a => [a.name, a.t])),
+    shot_type: d.shot_type || (d.type === 'batting' ? 'swing' : null),
+    rejected: d.status === 'discard', confidence: d.confidence_score }));
+  active = segments.length ? 0 : -1;
+  status(`engine proposed ${segments.length} segments — verify & correct`);
+  render();
+};
+document.getElementById('autoclip').onclick = async () => {
+  const name = document.getElementById('videosel').value;
+  if (!name) { status('upload a video first'); return; }
+  const mode = document.getElementById('modesel').value;
+  status('auto-clipping… (detection + cutting, first run takes a minute or two)');
+  const r = await api('/api/autoclip', {name, mode});
+  if (!r.ok) { status('auto-clip failed: ' + (await r.text())); return; }
+  const j = await r.json();
+  const grid = document.getElementById('clipgrid');
+  const box = document.getElementById('clipsout');
+  box.style.display = 'block';
+  if (!j.clips.length) {
+    grid.innerHTML = `<div style="color:var(--dim)">No clips produced —
+      ${j.n_detected} detection(s), all discarded.
+      Flags: ${j.session_flags.join(', ') || 'none'}</div>`;
+    status('done — nothing clippable'); return;
+  }
+  grid.innerHTML = j.clips.map(c => {
+    const src = '/api/clip?' + new URLSearchParams({dir, name, file: c.clip_file});
+    const col = c.status === 'auto' ? 'var(--bat)' : 'var(--bowl)';
+    return `<div style="background:#232328;border-radius:6px;overflow:hidden">
+      <video src="${src}" controls playsinline style="width:100%;aspect-ratio:9/14;background:#000"></video>
+      <div style="padding:6px 8px;font-size:12px">
+        <b>${c.clip_file}</b><br>
+        <span style="color:${col}">${c.status.toUpperCase()}</span>
+        · conf ${c.confidence_score}
+        · ${c.start_timestamp}s → ${c.end_timestamp}s<br>
+        <a href="${src}" download style="color:var(--acc)">download</a>
+      </div></div>`;
+  }).join('');
+  status(`auto-clipped: ${j.clips.length} clip(s) from ${j.n_detected} detection(s)` +
+         (j.session_flags.length ? ' · flags: ' + j.session_flags.join(', ') : ''));
+};
+document.getElementById('save').onclick = async () => {
+  const name = document.getElementById('videosel').value;
+  const verified_by = document.getElementById('labeler').value || 'unknown';
+  const body = { segments: segments.map(s => ({...s, verified_by})) };
+  const r = await fetch('/api/labels?' + new URLSearchParams({dir, name}),
+    {method:'POST', headers:{'Content-Type':'application/json'},
+     body: JSON.stringify(body)});
+  if (r.ok) { const j = await r.json(); status('saved ' + j.saved + ' → ' + j.path); }
+  else { const j = await r.json(); status('REJECTED: ' +
+    (j.detail||[]).map(e => `seg ${e.segment+1}: ${e.error}`).join(' | ')); }
+};
+
+function render() {
+  TL.width = TL.clientWidth; TL.height = 64;
+  ctx.fillStyle = '#1b1b1f'; ctx.fillRect(0, 0, TL.width, TL.height);
+  const dur = V.duration || 1;
+  segments.forEach((s, i) => {
+    const x0 = s.start_t / dur * TL.width, x1 = s.end_t / dur * TL.width;
+    ctx.fillStyle = s.rejected ? '#e74c3c55'
+      : (s.role === 'bowling' ? '#ff9f4388' : '#2ecc7188');
+    ctx.fillRect(x0, 8, Math.max(2, x1 - x0), 40);
+    if (i === active) { ctx.strokeStyle = '#4da3ff'; ctx.lineWidth = 2;
+      ctx.strokeRect(x0, 8, Math.max(2, x1 - x0), 40); }
+    ctx.fillStyle = '#fff';
+    Object.values(s.anchors).forEach(t => {
+      const x = t / dur * TL.width; ctx.fillRect(x, 12, 1.5, 32); });
+  });
+  const px = V.currentTime / dur * TL.width;
+  ctx.fillStyle = '#fff'; ctx.fillRect(px, 0, 1, TL.height);
+  const list = document.getElementById('segs');
+  list.innerHTML = segments.map((s, i) => `
+    <div class="seg ${s.role} ${s.rejected?'rejected':''} ${i===active?'active':''}"
+         onclick="setActive(${i})">
+      <b>${i+1}. ${s.role}</b> ${s.shot_type ? '('+s.shot_type+')' : ''}
+      ${s.rejected ? ' — REJECTED' : ''}
+      ${s.confidence !== undefined ? `<small>conf ${s.confidence}</small>` : ''}
+      <br><small>${s.start_t.toFixed(2)}s → ${s.end_t.toFixed(2)}s</small>
+      <div class="anchor-row">${Object.entries(s.anchors).map(([k,v]) =>
+        `<span class="anchor-chip">${k} @ ${v.toFixed(2)}</span>`).join('')}</div>
+    </div>`).join('');
+}
+window.setActive = i => { active = i; V.currentTime = segments[i].start_t; render(); };
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const t = V.currentTime, s = segments[active];
+  const anchor = name => { if (s) { s.anchors[name] = t; render(); } };
+  switch (e.key) {
+    case ' ': e.preventDefault(); V.paused ? V.play() : V.pause(); break;
+    case ',': V.currentTime = Math.max(0, t - 1 / fps); break;
+    case '.': V.currentTime = t + 1 / fps; break;
+    case 'ArrowLeft': V.currentTime = Math.max(0, t - 1); break;
+    case 'ArrowRight': V.currentTime = t + 1; break;
+    case '[': if (s) { s.start_t = t; render(); } break;
+    case ']': if (s) { s.end_t = t; render(); } break;
+    case 'n': segments.push({role:'bowling', start_t:t, end_t:t+5, anchors:{},
+        shot_type:null, rejected:false}); active = segments.length-1; render(); break;
+    case 'm': segments.push({role:'batting', start_t:t, end_t:t+4, anchors:{},
+        shot_type:'swing', rejected:false}); active = segments.length-1; render(); break;
+    case 'x': if (s) { s.rejected = !s.rejected; render(); } break;
+    case 'l': if (s && s.role === 'batting') {
+        s.shot_type = s.shot_type === 'swing' ? 'leave' : 'swing';
+        if (s.shot_type === 'leave') delete s.anchors.impact; render(); } break;
+    case 'b': anchor('back_foot_contact'); break;
+    case 'f': anchor('front_foot_contact'); break;
+    case 'r': anchor('ball_release'); break;
+    case 's': anchor('stance_set'); break;
+    case 't': anchor('trigger_onset'); break;
+    case 'i': anchor('impact'); break;
+  }
+});
+TL.onclick = e => {
+  const frac = e.offsetX / TL.width;
+  V.currentTime = frac * (V.duration || 0);
+};
+V.addEventListener('timeupdate', render);
+V.addEventListener('loadedmetadata', render);
+loadVideos();
+</script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+# --- Footage and derived media (never commit; third-party rights + size) ---
+test_videos/
+clips/
+clips_out/
+*_clips/
+*.mp4
+*.mov
+*.m4v
+*.prelabel*.json
+
+# --- Model weights (auto-downloaded on first run) ---
+*.pt
+*.pth
+*.onnx
+
+# --- Bootstrapped dataset (regenerate with scripts/bootstrap_dataset.py) ---
+dataset/features/
+dataset/labels/
+models/
+
+# --- Job store / local state ---
+*.db
+autoclip_jobs.db
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,11 @@
+# Engine core (Python 3.9+)
+numpy<2.1
+scipy<1.14
+opencv-python
+ultralytics          # YOLO11 pose; pulls torch
+# Service + labeler
+fastapi
+uvicorn
+pydantic
+# Dev
+pytest
