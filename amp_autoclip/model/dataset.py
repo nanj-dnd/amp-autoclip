@@ -93,13 +93,23 @@ def load_samples(root: str, role: str) -> List[Sample]:
     return samples
 
 
+def session_key(video_id: str) -> str:
+    """Session a sequence belongs to: "part_3__t12" -> "part_3"."""
+    return video_id.rsplit("__t", 1)[0]
+
+
 def session_split(samples: List[Sample], val_frac: float = 0.15,
                   test_frac: float = 0.15) -> Tuple[List[Sample], List[Sample], List[Sample]]:
-    """Deterministic session-level split (hash of video_id), so the split is
-    stable as new labels arrive and no session ever straddles splits."""
+    """Deterministic session-level split, so the split is stable as new labels
+    arrive and no session ever straddles splits.
+
+    Hashes the SESSION key, not video_id: both dataset builders emit one
+    sequence per (video, track) as "<stem>__t<track>", so hashing video_id
+    would scatter the tracks of a single session across train/val/test —
+    the exact clip-level leak this function exists to prevent."""
     train, val, test = [], [], []
     for s in samples:
-        h = int(hashlib.sha1(s.video_id.encode()).hexdigest(), 16) % 100
+        h = int(hashlib.sha1(session_key(s.video_id).encode()).hexdigest(), 16) % 100
         if h < test_frac * 100:
             test.append(s)
         elif h < (test_frac + val_frac) * 100:
