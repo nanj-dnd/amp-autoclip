@@ -96,6 +96,10 @@ def main() -> None:
                    default="none",
                    help="reweight CE by inverse phase frequency (computed on "
                         "the train split only). 'sqrt' is the milder variant.")
+    p.add_argument("--phase-space", choices=["full", "boundary"],
+                   default="full",
+                   help="'boundary' collapses the internal phases to "
+                        "idle/delivery — clip start+end only")
     p.add_argument("--select", choices=["frame_acc", "macro_recall"],
                    default="frame_acc",
                    help="metric the checkpoint is selected on")
@@ -105,7 +109,7 @@ def main() -> None:
                         "must never leak a session across sides)")
     args = p.parse_args()
 
-    samples = load_samples(args.data, args.role)
+    samples = load_samples(args.data, args.role, args.phase_space)
     if args.holdout:
         val = [s for s in samples if s.video_id.startswith(args.holdout)]
         train = [s for s in samples if not s.video_id.startswith(args.holdout)]
@@ -118,7 +122,7 @@ def main() -> None:
                          "(see labeler/)")
     train = train + [_flip(s) for s in train]
 
-    n_phases = len(L.phases_for(args.role))
+    n_phases = len(L.phases_for(args.role, args.phase_space))
     class_w = None
     if args.class_weights != "none":
         counts = np.zeros(n_phases, dtype=np.float64)
@@ -133,7 +137,7 @@ def main() -> None:
         w = w / w[w > 0].mean()          # keep the loss on the same scale
         class_w = torch.tensor(w, dtype=torch.float32, device=args.device)
         print("class weights: %s" % {n: round(float(v), 2) for n, v
-                                     in zip(L.phases_for(args.role), w)})
+                                     in zip(L.phases_for(args.role, args.phase_space), w)})
 
     model = MSTCN(n_phases=n_phases,
                   n_events=len(L.events_for(args.role))).to(args.device)
@@ -168,6 +172,7 @@ def main() -> None:
     if best_state:
         model.load_state_dict(best_state)
     torch.save({"state_dict": model.state_dict(), "role": args.role,
+                "phase_space": args.phase_space,
                 "selected_on": args.select, "val_score": best_score,
                 "val_frame_acc": frame_accuracy(model, val, args.device),
                 "val_macro_recall": macro_recall(model, val, args.device,
