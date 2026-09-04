@@ -56,3 +56,33 @@ a held-out net session). Prefer the net sessions.
         --videos /path/to/videos --role batting --out dataset --windows labels
 
 `--dry-run` parses and reports without needing the videos or any dependency.
+
+## Calibration findings from the ball-tracker clip export (2026-09-05)
+
+84 pre-cut single-delivery clips (11 sessions, 26 Aug - 4 Sep 2026, portrait
+720x1280 @60fps), each a fixed window: 68 of 84 are exactly 3.600s or 3.300s.
+Measured with `scripts/calibrate_from_clips.py`.
+
+- **The engine detects a delivery in 83 of 84** — it works on portrait phone
+  footage, a setup it had not been tested against.
+- **But it is not confident:** 80 of 83 land in `review`, median confidence
+  0.62, on clips where a delivery is guaranteed present. Confidence
+  calibration is pessimistic; this set is free ground truth for tuning it.
+- **Padding:** the production system keeps a median **1.09s before impact and
+  2.35s after**. Batting defaults are `pre_roll_ms: 1000` / `post_roll_ms: 750`
+  — pre-roll is close, post-roll looks ~3x short. Not changed on one rig's
+  evidence; verify on a second setup first.
+- **No evidence the fixed window truncates deliveries.** 65% of clips had the
+  follow-through resolve within 100ms of the file end, but those clips had
+  2.34s of footage after impact vs 2.41s for cleanly-resolved ones — no less
+  room. The edge-hits are the engine's resolution criterion (which needs
+  sustained stillness) running out of clip, not truncation. The case for
+  adaptive clipping on this rig is footage with no hardware trigger, not
+  fixing a present truncation failure.
+
+These clips **cannot train boundary detection**: each is one delivery filling
+the whole file, so start=0 and end=duration — the degenerate structure that
+makes a model score a perfect 0ms start error by predicting "delivery" from
+frame 0. The continuous source recordings they were cut from would be far more
+valuable: 89 delivery timestamps across 11 sessions, vs the 19 currently
+labeled.
