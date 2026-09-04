@@ -37,7 +37,18 @@ BATTING_EVENTS: List[str] = ["stance_set", "impact"]
 EVENT_SIGMA_FRAMES = 2.0   # Gaussian target width around the labeled frame
 
 
-def phases_for(role: str) -> List[str]:
+# ---- boundary-only space ----
+# When only the clip's start and end are wanted, the internal phase split is
+# dead weight: it has to be derived (no schema carries a trigger onset), and
+# the derived sub-phases are a few percent of frames each, which is what made
+# the 4-class model collapse. "delivery" here spans the whole labeled segment.
+BOUNDARY_PHASES: List[str] = ["idle", "delivery"]
+BOUNDARY_GRAMMAR: Dict[int, List[int]] = {0: [0, 1], 1: [1, 0]}
+
+
+def phases_for(role: str, phase_space: str = "full") -> List[str]:
+    if phase_space == "boundary":
+        return BOUNDARY_PHASES
     return BOWLING_PHASES if role == "bowling" else BATTING_PHASES
 
 
@@ -45,7 +56,9 @@ def events_for(role: str) -> List[str]:
     return BOWLING_EVENTS if role == "bowling" else BATTING_EVENTS
 
 
-def grammar_for(role: str) -> Dict[int, List[int]]:
+def grammar_for(role: str, phase_space: str = "full") -> Dict[int, List[int]]:
+    if phase_space == "boundary":
+        return BOUNDARY_GRAMMAR
     return BOWLING_GRAMMAR if role == "bowling" else BATTING_GRAMMAR
 
 

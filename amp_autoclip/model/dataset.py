@@ -45,11 +45,12 @@ class Sample:
     event_targets: np.ndarray  # (n_events, N)
 
 
-def _phase_index(role: str, name: str) -> int:
-    return L.phases_for(role).index(name)
+def _phase_index(role: str, name: str, phase_space: str = "full") -> int:
+    return L.phases_for(role, phase_space).index(name)
 
 
-def load_samples(root: str, role: str) -> List[Sample]:
+def load_samples(root: str, role: str,
+                 phase_space: str = "full") -> List[Sample]:
     samples: List[Sample] = []
     labels_dir = os.path.join(root, "labels")
     if not os.path.isdir(labels_dir):
@@ -77,11 +78,21 @@ def load_samples(root: str, role: str) -> List[Sample]:
                 # region default to idle
                 lo = np.searchsorted(t, rec["start_t"] - 3.0)
                 hi = np.searchsorted(t, rec["end_t"] + 3.0)
-                phase[lo:hi] = _phase_index(role, "idle")
-                for ph in rec.get("phases", []):
-                    a = np.searchsorted(t, ph["start_t"])
-                    b = np.searchsorted(t, ph["end_t"])
-                    phase[a:b] = _phase_index(role, ph["phase"])
+                phase[lo:hi] = _phase_index(role, "idle", phase_space)
+                if phase_space == "boundary":
+                    # one span, exactly the labeled boundaries — nothing derived
+                    a = np.searchsorted(t, rec["start_t"])
+                    b = np.searchsorted(t, rec["end_t"])
+                    is_bg = rec.get("background") or (
+                        len(rec.get("phases") or []) == 1
+                        and rec["phases"][0]["phase"] == "idle")
+                    if not is_bg:
+                        phase[a:b] = _phase_index(role, "delivery", phase_space)
+                else:
+                    for ph in rec.get("phases", []):
+                        a = np.searchsorted(t, ph["start_t"])
+                        b = np.searchsorted(t, ph["end_t"])
+                        phase[a:b] = _phase_index(role, ph["phase"])
                 for name, at in (rec.get("anchors") or {}).items():
                     if at is not None and name in L.events_for(role):
                         event_frames[name] = int(np.searchsorted(t, at))

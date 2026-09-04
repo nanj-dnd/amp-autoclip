@@ -72,12 +72,19 @@ class MSTCN(nn.Module):
 
 
 def segmentation_loss(stage_outputs, phase_targets, event_logits,
-                      event_targets, smooth_weight: float = 0.15):
+                      event_targets, smooth_weight: float = 0.15,
+                      class_weights=None):
     """MS-TCN loss: CE per stage + truncated MSE smoothing on log-probs
-    (suppresses over-segmentation flicker) + BCE on event heatmaps."""
+    (suppresses over-segmentation flicker) + BCE on event heatmaps.
+
+    class_weights: optional (n_phases,) tensor. The phases that define a
+    clip's boundaries (shot/followthrough, or delivery/followthrough) are a
+    few percent of frames, so unweighted CE is minimized by never predicting
+    them at all — see train.py --class-weights."""
     loss = torch.zeros((), device=phase_targets.device)
     for out in stage_outputs:
-        loss = loss + F.cross_entropy(out, phase_targets, ignore_index=-100)
+        loss = loss + F.cross_entropy(out, phase_targets, ignore_index=-100,
+                                      weight=class_weights)
         logp = F.log_softmax(out, dim=1)
         diff = torch.clamp((logp[:, :, 1:] - logp[:, :, :-1].detach()) ** 2,
                            max=16.0)
