@@ -35,3 +35,6 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+
+# --- Ingested datasets (regenerate from labels/ + footage) ---
+dataset_*/
